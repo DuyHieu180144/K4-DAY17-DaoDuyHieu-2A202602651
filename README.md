@@ -143,13 +143,18 @@ source .venv/bin/activate
 pip install langchain langgraph langchain-openai langchain-google-genai langchain-anthropic langchain-ollama langchain-openrouter python-dotenv tabulate pytest
 ```
 
-Nếu muốn chạy chế độ live với LLM thật, hãy tạo file `.env` ở root repo (đã nằm trong `.gitignore`). Tên biến môi trường do các bạn quyết định khi viết `load_config()`. Ví dụ:
+`load_config()` đọc biến môi trường (hoặc file `.env` ở root repo nếu đã cài `python-dotenv`). File `.env` đã được `.gitignore` loại trừ. Cấu hình chính và judge dùng các biến `LLM_*` và `JUDGE_*`; judge mặc định dùng cùng provider/model với agent. Ví dụ:
 
 ```
 LLM_PROVIDER=openai
 LLM_MODEL=gpt-4o-mini
+LLM_TEMPERATURE=0
 OPENAI_API_KEY=...
+COMPACT_THRESHOLD_TOKENS=1200
+COMPACT_KEEP_MESSAGES=6
 ```
+
+`LLM_PROVIDER` và `JUDGE_PROVIDER` nhận một trong các giá trị `openai`, `custom`, `gemini`, `anthropic`, `ollama`, `openrouter`. API key và base URL có thể cấu hình theo provider (`OPENAI_API_KEY`/`OPENAI_BASE_URL`, `CUSTOM_API_KEY`/`CUSTOM_BASE_URL`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_API_KEY`/`OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`/`OPENROUTER_BASE_URL`); `LLM_API_KEY`, `LLM_BASE_URL`, `JUDGE_API_KEY` và `JUDGE_BASE_URL` cho phép ghi đè riêng cho model tương ứng. `DATA_DIR` và `STATE_DIR` tùy chọn đổi thư mục dữ liệu và trạng thái; đường dẫn tương đối được tính từ root repo.
 
 ## Chạy benchmark và test
 
@@ -164,6 +169,25 @@ pytest src/test_agents.py -v
 ```
 
 Benchmark cần in ra hai bảng: **Standard Benchmark** và **Long-Context Stress Benchmark**. Mỗi bảng so sánh Baseline với Advanced theo đủ 6 cột trong phần "Chỉ số benchmark cần hiểu".
+
+## Phân tích kết quả benchmark offline
+
+Kết quả hiện tại được chạy bằng chế độ offline xác định, không gọi LLM thật:
+
+| Bộ benchmark | Agent | Agent tokens only | Prompt tokens processed | Cross-session recall | Response quality | Memory growth (bytes) | Compactions |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Standard | Baseline | 1.402 | 19.599 | 0,00 | 0,20 | 0 | 0 |
+| Standard | Advanced | 4.733 | 39.817 | 1,00 | 1,00 | 551 | 0 |
+| Long-context stress | Baseline | 233 | 23.162 | 0,00 | 0,20 | 0 | 0 |
+| Long-context stress | Advanced | 1.323 | 18.315 | 1,00 | 1,00 | 466 | 16 |
+
+Advanced recall tốt hơn vì hồ sơ `User.md` tồn tại xuyên qua các thread mới, trong khi Baseline chỉ có lịch sử của thread hiện tại. Trên bộ Standard, Advanced đạt recall 1,00 nhưng xử lý khoảng gấp đôi prompt tokens so với Baseline (39.817 so với 19.599). Đây là trade-off dự kiến: ở hội thoại ngắn, chi phí đưa hồ sơ vào ngữ cảnh có thể lớn hơn lợi ích compact.
+
+Ở stress test, Advanced compact 16 lần và xử lý 18.315 prompt tokens, thấp hơn Baseline 23.162 (giảm khoảng 20,9%). Điều này minh họa rằng lợi ích compact chủ yếu nằm ở việc giảm lịch sử được đưa vào prompt; nó không nhất thiết làm giảm `Agent tokens only`. Trong phép chạy này, số agent tokens của Advanced cao hơn ở cả hai bộ vì câu trả lời offline có thể lặp lại nhiều facts trong hồ sơ. Đây là đặc điểm của đường offline hiện tại, không phải kết luận chung về mọi model live.
+
+Memory growth của Advanced là 551 bytes ở Standard và 466 bytes ở stress test cho các hồ sơ benchmark trong lần chạy này. Dung lượng nhỏ không loại bỏ rủi ro: nếu trích xuất sai, thông tin cũ không được cập nhật đúng, hoặc quá nhiều sở thích được lưu, hồ sơ có thể phình và làm tăng prompt overhead. Cần tiếp tục theo dõi correction, lọc fact và giới hạn những gì được giữ lâu dài.
+
+**Giới hạn diễn giải:** `Agent tokens only` và `Prompt tokens processed` hiện là ước lượng heuristic trong chế độ offline, không phải usage do provider báo cáo. `Response quality` cũng là điểm heuristic dựa chủ yếu vào recall và việc câu trả lời không rỗng; nó không phải đánh giá độc lập của người chấm hay judge model. Vì vậy, các con số này dùng để kiểm tra hành vi và so sánh tương đối trong lab, không đại diện cho chi phí hoặc chất lượng production. Muốn kết luận về LLM thật cần hoàn thiện provider, chạy benchmark live và đánh giá response quality bằng judge hoặc review riêng.
 
 ## Cách dùng repo này
 
